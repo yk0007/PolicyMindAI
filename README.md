@@ -1,13 +1,12 @@
-# 🧠 PolicyMind: Intelligent Insurance Policy Analysis
-
+#  📄PolicyMindAI
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![Deploy on Streamlit Cloud](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io/cloud)
 
 <div align="center">
-  <img src="https://img.icons8.com/color/96/000000/insurance-policy.png" alt="PolicyMind Logo" width="100"/>
-  <h2>🤖 AI-Powered Insurance Policy Analysis</h2>
+ 
+  <h2> AI-Powered Insurance Policy Analysis</h2>
   <p>Extract insights, check coverage, and understand complex insurance policies with natural language queries.</p>
 </div>
 
