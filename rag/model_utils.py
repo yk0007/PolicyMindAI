@@ -18,11 +18,19 @@ class ModelProvider(str, Enum):
     HUGGINGFACE = "huggingface"
     OPENAI = "openai"
 
-# Default API keys (can be overridden by user input)
+# API keys should be provided via environment variables
 DEFAULT_API_KEYS = {
-    "GOOGLE_API_KEY": "***REMOVED***",
-    "GROQ_API_KEY": "***REMOVED***"
+    "GOOGLE_API_KEY": "",
+    "GROQ_API_KEY": ""
 }
+
+def get_api_key(provider: ModelProvider) -> str:
+    """Get API key for the specified provider from environment variables."""
+    key_name = f"{provider.upper()}_API_KEY"
+    api_key = os.environ.get(key_name, "")
+    if not api_key:
+        raise ValueError(f"{key_name} environment variable is not set")
+    return api_key
 
 # Available embedding models
 AVAILABLE_EMBEDDING_MODELS = [
@@ -112,7 +120,7 @@ def get_llm_instance(
     Args:
         provider: The model provider (e.g., ModelProvider.GROQ)
         model_name: The name of the model to use
-        api_keys: Dictionary of API keys for the provider
+        api_keys: Dictionary of API keys for the provider (deprecated, use environment variables instead)
         temperature: Temperature for sampling (0.0 to 1.0)
         max_tokens: Maximum number of tokens to generate
         **kwargs: Additional model-specific parameters
@@ -120,8 +128,8 @@ def get_llm_instance(
     Returns:
         An instance of the requested language model
     """
-    # Set the API keys first
-    set_api_keys(api_keys)
+    # Get API key from environment variables
+    api_key = get_api_key(provider)
     
     if provider == ModelProvider.GROQ:
         return get_llm(
@@ -168,63 +176,45 @@ def get_llm(
     temperature: float = 0.1,
     max_tokens: int = 4000,
     **kwargs
-) -> Any:
+):
     """
     Get a language model instance based on the specified model name.
     
     Args:
         model_name: Name of the model to load. Supported models:
                    - Groq models: 'llama3-70b-8192', 'llama3-8b-8192', 'gemma-7b-it', etc.
+                   - Ollama models: 'llama3', 'mistral', 'gemma'
+                   - Google models: 'gemini-1.5-pro-latest', 'gemini-1.5-flash-latest', etc.
         temperature: Temperature for sampling (0.0 to 1.0)
         max_tokens: Maximum number of tokens to generate
         **kwargs: Additional model-specific parameters
         
     Returns:
         An instance of the requested language model
+        
+    Raises:
+        ValueError: If the model is not supported or API key is missing
     """
     try:
-        # Try to import Groq first
-        from groq import Groq
-        from langchain_groq import ChatGroq
-        
-        # Default Groq model mapping
-        groq_models = {
-            'llama3-70b-8192': 'llama3-70b-8192',
-            'llama3-8b-8192': 'llama3-8b-8192',
-            'gemma-7b-it': 'gemma-7b-it',
-            'mixtral-8x7b-32768': 'mixtral-8x7b-32768',
-            'llama2-70b-4096': 'llama2-70b-4096',
-            'gemma2-9b-it': 'gemma2-9b-it',
-            'llama-3.1-8b-instant': 'llama-3.1-8b-instant',
-            'meta-llama/llama-4-maverick-17b-128e-instruct': 'meta-llama/llama-4-maverick-17b-128e-instruct',
-            'mistral-saba-24b': 'mistral-saba-24b',
-            'qwen/qwen3-32b': 'qwen/qwen3-32b'
-        }
-        
-        # Get the model name, defaulting to the input if not found in the mapping
-        model_id = groq_models.get(model_name, model_name)
+        # Determine the provider based on the model name
+        if model_name in ["llama3-70b-8192", "llama3-8b-8192", "gemma-7b-it", "mixtral-8x7b-32768", 
+                         "llama2-70b-4096", "gemma2-9b-it", "llama-3.1-8b-instant",
+                         "meta-llama/llama-4-maverick-17b-128e-instruct", "mistral-saba-24b", "qwen/qwen3-32b"]:
+            provider = ModelProvider.GROQ
+        elif model_name in ["llama3", "mistral", "gemma"]:
+            provider = ModelProvider.OLLAMA
+        elif model_name in ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", 
+                           "gemini-1.0-pro-latest", "gemini-1.0-flash-latest"]:
+            provider = ModelProvider.GOOGLE
+        else:
+            raise ValueError(f"Unsupported model: {model_name}")
         
         # Get the API key from environment variables
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY environment variable is not set")
+        api_key = get_api_key(provider)
         
-        logger.info(f"Initializing Groq model: {model_id}")
+        # Return the appropriate model instance
+        return get_llm_instance(provider, model_name, {"api_key": api_key}, temperature, max_tokens, **kwargs)
         
-        # Initialize the Groq chat model
-        llm = ChatGroq(
-            model=model_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            groq_api_key=api_key,
-            **kwargs
-        )
-        
-        return llm
-        
-    except ImportError as e:
-        logger.error(f"Failed to import required packages: {str(e)}")
-        raise
     except Exception as e:
         logger.error(f"Error initializing model {model_name}: {str(e)}")
         raise
