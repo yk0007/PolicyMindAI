@@ -45,3 +45,6 @@ Thumbs.db
 
 # FAISS indices
 indices/
+
+# Local .streamlit secrets
+.streamlit/secrets.toml
