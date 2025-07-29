@@ -15,8 +15,6 @@ class ModelProvider(str, Enum):
     GROQ = "groq"
     OLLAMA = "ollama"
     GOOGLE = "google"
-    HUGGINGFACE = "huggingface"
-    OPENAI = "openai"
 
 # API keys should be provided via environment variables
 DEFAULT_API_KEYS = {

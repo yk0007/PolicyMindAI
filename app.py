@@ -127,30 +127,16 @@ def sidebar():
         )
         st.session_state.embedding_model = embedding_model
         
-        # API Key input
-        st.subheader("API Keys")
+        # API keys are loaded from environment variables or Streamlit secrets
+        # No API key input in the frontend for security
+        if selected_provider in [ModelProvider.GROQ, ModelProvider.GOOGLE]:
+            # Check if API keys are available in environment variables or secrets
+            if not os.environ.get("GROQ_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
+                if hasattr(st, 'secrets') and hasattr(st.secrets, 'secrets'):
+                    if not (st.secrets.secrets.get("GROQ_API_KEY") or st.secrets.secrets.get("GOOGLE_API_KEY")):
+                        st.warning("ℹ️ API keys must be set via environment variables or Streamlit secrets.")
         
-        # Groq API Key
-        if selected_provider == ModelProvider.GROQ:
-            groq_key = st.text_input(
-                "Groq API Key",
-                type="password",
-                value=st.session_state.api_keys.get("GROQ_API_KEY", "")
-            )
-            if groq_key:
-                st.session_state.api_keys["GROQ_API_KEY"] = groq_key
-        
-        # Google API Key for Gemini
-        elif selected_provider == ModelProvider.GOOGLE:
-            google_key = st.text_input(
-                "Google API Key",
-                type="password",
-                value=st.session_state.api_keys.get("GOOGLE_API_KEY", "")
-            )
-            if google_key:
-                st.session_state.api_keys["GOOGLE_API_KEY"] = google_key
-        
-        # Ollama settings
+        # Ollama settings (local, no API key needed)
         elif selected_provider == ModelProvider.OLLAMA:
             st.info("Ollama runs locally. Make sure the Ollama server is running.")
             ollama_model = st.text_input(
