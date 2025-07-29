@@ -1080,29 +1080,41 @@ def process_document(
             # Use the enhanced PDF loader
             loader = DocumentLoader()
             
-            # Extract text with page numbers
-            with pdfplumber.open(file_path) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
-                    try:
-                        # Get page text
-                        page_text = page.extract_text() or ''
-                        
-                        # Create metadata with page number
-                        page_metadata = metadata.copy()
-                        page_metadata['page'] = page_num
-                        
-                        # Add to documents
-                        docs.append(LangchainDocument(
-                            page_content=page_text,
-                            metadata=page_metadata
-                        ))
-                    except Exception as e:
-                        logger.warning(f"Error processing page {page_num}: {str(e)}")
-                        continue
-            
-            # If no pages were processed, fall back to the original method
-            if not docs:
-                logger.warning("No pages processed with pdfplumber, falling back to default loader")
+            try:
+                # Try to import pdfplumber
+                import pdfplumber
+                
+                # Extract text with page numbers
+                with pdfplumber.open(file_path) as pdf:
+                    for page_num, page in enumerate(pdf.pages, 1):
+                        try:
+                            # Get page text
+                            page_text = page.extract_text() or ''
+                            
+                            # Create metadata with page number
+                            page_metadata = metadata.copy()
+                            page_metadata['page'] = page_num
+                            
+                            # Add to documents
+                            docs.append(LangchainDocument(
+                                page_content=page_text,
+                                metadata=page_metadata
+                            ))
+                        except Exception as e:
+                            logger.warning(f"Error processing page {page_num}: {str(e)}")
+                            continue
+                
+                # If no pages were processed, fall back to the original method
+                if not docs:
+                    logger.warning("No pages processed with pdfplumber, falling back to default loader")
+                    docs = loader.load_document(file_path)
+                    
+            except ImportError:
+                logger.warning("pdfplumber not available, falling back to default PDF loader")
+                docs = loader.load_document(file_path)
+            except Exception as e:
+                logger.error(f"Error processing PDF with pdfplumber: {str(e)}")
+                logger.warning("Falling back to default PDF loader")
                 docs = loader.load_document(file_path)
         else:
             # For other file types, use the appropriate loader
