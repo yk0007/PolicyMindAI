@@ -268,7 +268,11 @@ def update_vector_store():
 
 # Display suggested questions
 def display_suggested_questions():
+<<<<<<< HEAD
     if st.session_state.get('suggested_questions'):
+=======
+    if st.session_state.get('suggested_questions') and not st.session_state.get('processing_suggested_question', False):
+>>>>>>> 7064587 (Optimised the output response)
         st.subheader("Suggested Questions")
         cols = st.columns(2)  # Create 2 columns for better layout
         
@@ -280,8 +284,17 @@ def display_suggested_questions():
                     use_container_width=True,
                     help="Click to ask this question"
                 ):
+<<<<<<< HEAD
                     # Set the question as the current prompt and process it
                     process_user_question(question)
+=======
+                    # Set flag to prevent recursion
+                    st.session_state.processing_suggested_question = True
+                    # Set the question as the current prompt and process it
+                    process_user_question(question)
+                    # Clear the flag after processing
+                    st.session_state.processing_suggested_question = False
+>>>>>>> 7064587 (Optimised the output response)
                     # Force a rerun to show the processing
                     st.rerun()
 

@@ -60,6 +60,7 @@ class QueryEngine:
                 return "I couldn't find any relevant information to answer your question.", []
             
             # Create a prompt template
+<<<<<<< HEAD
             prompt_template = """Use the following pieces of context to answer the question at the end. 
             If you don't know the answer, just say that you don't know, don't try to make up an answer.
             
@@ -67,12 +68,58 @@ class QueryEngine:
             
             Question: {question}
             Answer:"""
+=======
+            prompt_template = """You are an AI assistant analyzing an insurance policy document. 
+            Your task is to provide accurate information based on the document content, especially focusing on tables and lists that contain coverage details.
+
+            Document Context:
+            {context}
+
+            When answering questions about coverage, benefits, or exclusions, pay special attention to any tables or lists in the context, 
+            as they often contain important details about what is covered or excluded.
+
+            If the question is about whether something is covered, first check for explicit mentions in the text, then check any tables or lists for details.
+            If you find the information in a table, format your response to clearly indicate this.
+
+            Question: {question}
+            
+            Guidelines for your response:
+            1. Be precise and quote relevant policy details when possible
+            2. If information comes from a table, mention that it's from a table
+            3. If you're unsure, say so rather than guessing
+            4. For coverage questions, clearly state whether something is covered, excluded, or if the information isn't clear
+            
+            Answer:
+            """
+>>>>>>> 7064587 (Optimised the output response)
             
             prompt = PromptTemplate(
                 template=prompt_template,
                 input_variables=["context", "question"]
             )
             
+<<<<<<< HEAD
+=======
+            # Format the context to better preserve table structure
+            formatted_docs = []
+            for i, doc in enumerate(docs):
+                source = f"Document {i+1}"
+                if hasattr(doc, 'metadata'):
+                    if 'source' in doc.metadata:
+                        source = os.path.basename(str(doc.metadata['source']))
+                    if 'page' in doc.metadata:
+                        source += f" (Page {doc.metadata['page']})"
+                
+                # Add markers for table content
+                content = doc.page_content
+                if '```table' in content or '|' in content:  # Likely contains a table
+                    content = "\n[TABLE CONTENT]\n" + content + "\n[END TABLE]\n"
+                
+                formatted_docs.append(f"[{source}]\n{content}")
+            
+            context = "\n\n".join(formatted_docs)
+            
+>>>>>>> 7064587 (Optimised the output response)
             # Create a QA chain
             qa_chain = load_qa_chain(
                 self.llm,
@@ -543,6 +590,11 @@ def get_suggested_questions(
     """
     Generate relevant suggested questions based on the document context.
     
+<<<<<<< HEAD
+=======
+    This is a simplified version that avoids recursion entirely and has robust error handling.
+    
+>>>>>>> 7064587 (Optimised the output response)
     Args:
         context: The document context to analyze
         llm: The language model instance to use
@@ -552,14 +604,35 @@ def get_suggested_questions(
     Returns:
         List of suggested questions (strings)
     """
+<<<<<<< HEAD
     try:
+=======
+    # Default fallback questions
+    default_questions = [
+        "What are the key benefits of this policy?",
+        "What is not covered by this insurance?",
+        "How do I file a claim?",
+        "What is the policy's coverage limit?"
+    ]
+    
+    try:
+        # Ensure we have a valid context
+        if not context or not isinstance(context, str):
+            logger.warning("Invalid or empty context provided for question generation")
+            return default_questions[:num_questions]
+            
+>>>>>>> 7064587 (Optimised the output response)
         # Truncate context if too long
         if len(context) > max_context_length:
             context = context[:max_context_length] + "... [truncated]"
         
         prompt = f"""You are an AI assistant helping users explore their insurance policy documents.
         
+<<<<<<< HEAD
         Based on the following document context, generate {num_questions} specific and useful questions 
+=======
+        Based on the following document context, generate exactly {num_questions} specific and useful questions 
+>>>>>>> 7064587 (Optimised the output response)
         that a policyholder might ask about their coverage, benefits, or policy details.
         
         Guidelines:
@@ -568,6 +641,10 @@ def get_suggested_questions(
         3. Vary the types of questions (coverage, benefits, exclusions, etc.)
         4. Keep questions concise and clear
         5. Avoid yes/no questions
+<<<<<<< HEAD
+=======
+        6. Generate EXACTLY {num_questions} questions
+>>>>>>> 7064587 (Optimised the output response)
         
         Document Context:
         {context}
@@ -575,6 +652,7 @@ def get_suggested_questions(
         Generate exactly {num_questions} questions, one per line, without numbering or bullet points.
         """
         
+<<<<<<< HEAD
         # Get response from LLM
         response = llm.invoke(prompt)
         
@@ -588,6 +666,23 @@ def get_suggested_questions(
         questions = []
         for line in response_text.split('\n'):
             line = line.strip()
+=======
+        # Get response from LLM with a timeout to prevent hanging
+        try:
+            response = llm.invoke(prompt)
+            response_text = response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            logger.error(f"Error getting response from LLM: {str(e)}")
+            return default_questions[:num_questions]
+        
+        # Process the response to extract questions
+        questions = []
+        for line in response_text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+>>>>>>> 7064587 (Optimised the output response)
             # Remove any numbering or bullet points
             if line.startswith(('1.', '2.', '3.', '4.', '5.', '- ', '* ')):
                 line = line[2:].strip()
@@ -599,6 +694,7 @@ def get_suggested_questions(
                     line = line.rstrip('.') + '?'
                 questions.append(line)
         
+<<<<<<< HEAD
         # Ensure we have the right number of questions
         if len(questions) > num_questions:
             questions = questions[:num_questions]
@@ -624,3 +720,23 @@ def get_suggested_questions(
             "How do I file a claim?",
             "What is the policy's coverage limit?"
         ][:num_questions]
+=======
+        # If we got some questions but not enough, pad with default questions
+        if 0 < len(questions) < num_questions:
+            # Only add default questions that aren't already in our list
+            for q in default_questions:
+                if q not in questions:
+                    questions.append(q)
+                    if len(questions) >= num_questions:
+                        break
+        # If we got no questions at all, use default questions
+        elif not questions:
+            return default_questions[:num_questions]
+        
+        # Return up to the requested number of questions
+        return questions[:num_questions]
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in get_suggested_questions: {str(e)}", exc_info=True)
+        return default_questions[:num_questions]
+>>>>>>> 7064587 (Optimised the output response)

@@ -366,7 +366,11 @@ def extract_excluded_items(text: str) -> str:
         # Lines with specific exclusion terms
         r'(?i)(?:\b(?:exclusion|not\s+covered|excluded|not\s+eligible|not\s+payable|not\s+included|not\s+applicable)\b[^\n]*)',
         # Lines that look like exclusions (e.g., "- Baby food")
+<<<<<<< HEAD
         r'(?m)^\s*[\-•*]\s*([^\n]+)'
+=======
+        r'(?m)^\s*([^\n]+:\s*\n(?:\s+[^\n]+\n?)+)'
+>>>>>>> 7064587 (Optimised the output response)
     ]
     
     # Common exclusion keywords to look for
@@ -513,7 +517,11 @@ def extract_tables_with_pdfplumber(page) -> str:
     seen_tables = set()
     all_tables = []
     
+<<<<<<< HEAD
     # Try different extraction strategies
+=======
+    # Table extraction strategies - try multiple approaches
+>>>>>>> 7064587 (Optimised the output response)
     strategies = [
         # Default strategy for regular tables
         {},
@@ -538,10 +546,15 @@ def extract_tables_with_pdfplumber(page) -> str:
         }
     ]
     
+<<<<<<< HEAD
+=======
+    # First, try to extract structured tables
+>>>>>>> 7064587 (Optimised the output response)
     for strategy in strategies:
         try:
             tables = page.extract_tables(strategy)
             for table in tables:
+<<<<<<< HEAD
                 # Convert table to a tuple of tuples for hashing
                 table_key = tuple(tuple(row) for row in table if any(cell for cell in row))
                 if table_key and table_key not in seen_tables:
@@ -549,10 +562,34 @@ def extract_tables_with_pdfplumber(page) -> str:
                     markdown_table = format_table_as_markdown(table)
                     if markdown_table:
                         all_tables.append(markdown_table)
+=======
+                # Clean the table data
+                cleaned_table = []
+                for row in table:
+                    cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+                    # Skip empty rows
+                    if any(cell for cell in cleaned_row):
+                        cleaned_table.append(cleaned_row)
+                
+                # Skip empty tables
+                if not cleaned_table:
+                    continue
+                    
+                # Create a key to detect duplicates
+                table_key = tuple(tuple(row) for row in cleaned_table)
+                if table_key not in seen_tables:
+                    seen_tables.add(table_key)
+                    # Format as markdown table
+                    markdown_table = format_table_as_markdown(cleaned_table)
+                    if markdown_table:
+                        all_tables.append("```table\n" + markdown_table + "\n```")
+                        
+>>>>>>> 7064587 (Optimised the output response)
         except Exception as e:
             logger.warning(f"Error extracting table with strategy {strategy}: {str(e)}")
             continue
     
+<<<<<<< HEAD
     # Also extract text that looks like lists
     text = page.extract_text()
     if text:
@@ -784,6 +821,60 @@ def extract_tables_with_pdfplumber(page):
             return '\n\n' + '\n\n'.join(result) + '\n\n'
         return ""
 
+=======
+    # Extract text that might contain lists or tabular data
+    text = page.extract_text() or ""
+    
+    # Look for common insurance sections that might contain coverage details
+    coverage_terms = [
+        r'(?i)(?:what(?:\'s| is) (?:not )?covered|coverage details?|benefits?|exclusions?|limitations?|\bnot covered\b|\bexcluded\b|\bnot included\b)',
+        r'(?i)(?:table of benefits|schedule of benefits|summary of benefits|coverage summary)',
+        r'(?i)(?:in[- ]?patient|out[- ]?patient|surgical|hospital|medical|procedure|treatment|surgery|therapy)'
+    ]
+    
+    has_coverage_terms = any(re.search(term, text) for term in coverage_terms)
+    
+    # If we found coverage-related terms, be more aggressive in extracting lists
+    if has_coverage_terms or not all_tables:
+        # Look for bullet points and numbered lists
+        list_patterns = [
+            (r'(?m)^\s*[•◦‣⁃-]\s+(.+)$', '- '),  # Bullet points
+            (r'(?m)^\s*\d+\.\s+(.+)$', '1. '),  # Numbered lists
+            (r'(?m)^\s*[a-z]\)\s+(.+)$', 'a. '),  # Lettered lists
+            (r'(?m)^\s*[ivx]+\.\s+(.+)$', 'i. '),  # Roman numerals
+            (r'(?i)(?:covered|included|excluded|not covered|benefit|limitation)[:.]?\s*\n(?:\s*[-•*]\s*.+\n?)+', '- ')  # List after coverage terms
+        ]
+        
+        for pattern, prefix in list_patterns:
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
+            for match in matches:
+                item = match.group(1).strip() if len(match.groups()) > 0 else match.group(0).strip()
+                if item and len(item) > 5:  # Minimum length to avoid noise
+                    # Clean up the item
+                    item = re.sub(r'^\s*[\d•\-*]+[.)]?\s*', '', item)
+                    item = ' '.join(item.split())
+                    all_tables.append(f"```list\n{prefix}{item}\n```")
+    
+    # If we still don't have any tables, try to extract tabular data from text
+    if not all_tables and len(text) > 100:  # Only if we have substantial text
+        # Look for text that looks like a table (multiple lines with consistent spacing)
+        lines = text.split('\n')
+        potential_table = []
+        
+        for line in lines:
+            # Check if line has multiple words with consistent spacing
+            if len(re.findall(r'\s{2,}', line)) >= 2:
+                potential_table.append(line)
+            elif potential_table:
+                # If we were building a table but this line doesn't match, process what we have
+                if len(potential_table) >= 2:  # Need at least header + one row
+                    table_text = '\n'.join(potential_table)
+                    all_tables.append(f"```text_table\n{table_text}\n```")
+                potential_table = []
+    
+    return '\n\n'.join(all_tables) if all_tables else ""
+
+>>>>>>> 7064587 (Optimised the output response)
 def extract_policy_details(text: str) -> Dict[str, str]:
     """
     Extract key policy details from text using regex patterns.
@@ -1090,7 +1181,11 @@ def _load_excel_with_tables(self, file_path: str) -> List[LangchainDocument]:
         documents = []
         
         for sheet_name in xls.sheet_names:
+<<<<<<< HEAD
             df = pd.read_excel(xls, sheet_name=sheet_name)
+=======
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+>>>>>>> 7064587 (Optimised the output response)
             
             # Clean the DataFrame
             df = df.dropna(how='all').dropna(axis=1, how='all')

@@ -33,9 +33,13 @@ def get_api_key(provider: ModelProvider) -> str:
 # Available embedding models
 AVAILABLE_EMBEDDING_MODELS = [
     "BAAI/bge-base-en-v1.5",
+<<<<<<< HEAD
     "sentence-transformers/all-MiniLM-L6-v2",
     "intfloat/e5-base-v2",
     "thenlper/gte-base"
+=======
+    "sentence-transformers/all-MiniLM-L6-v2"
+>>>>>>> 7064587 (Optimised the output response)
 ]
 
 # Display names for models
@@ -130,12 +134,27 @@ def get_llm_instance(
     api_key = get_api_key(provider)
     
     if provider == ModelProvider.GROQ:
+<<<<<<< HEAD
         return get_llm(
             model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
             **kwargs
         )
+=======
+        try:
+            from langchain_groq import ChatGroq
+            return ChatGroq(
+                model_name=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                groq_api_key=api_key,
+                **kwargs
+            )
+        except ImportError:
+            logger.error("Groq not installed. Please install with: pip install langchain-groq")
+            raise
+>>>>>>> 7064587 (Optimised the output response)
     elif provider == ModelProvider.OLLAMA:
         try:
             from langchain_community.llms import Ollama
@@ -194,6 +213,7 @@ def get_llm(
         ValueError: If the model is not supported or API key is missing
     """
     try:
+<<<<<<< HEAD
         # Determine the provider based on the model name
         if model_name in ["llama3-70b-8192", "llama3-8b-8192", "gemma-7b-it", "mixtral-8x7b-32768", 
                          "llama2-70b-4096", "gemma2-9b-it", "llama-3.1-8b-instant",
@@ -212,6 +232,86 @@ def get_llm(
         
         # Return the appropriate model instance
         return get_llm_instance(provider, model_name, {"api_key": api_key}, temperature, max_tokens, **kwargs)
+=======
+        # First, try to determine the provider based on the model name
+        provider = None
+        
+        # Groq models
+        groq_models = [
+            "llama3-70b-8192", "llama3-8b-8192", "gemma-7b-it", "mixtral-8x7b-32768",
+            "llama2-70b-4096", "gemma2-9b-it", "llama-3.1-8b-instant",
+            "meta-llama/llama-4-maverick-17b-128e-instruct", "mistral-saba-24b", "qwen/qwen3-32b"
+        ]
+        
+        # Ollama models
+        ollama_models = ["llama3", "mistral", "gemma"]
+        
+        # Google models
+        google_models = [
+            "gemini-1.5-pro-latest", "gemini-1.5-flash-latest",
+            "gemini-1.0-pro-latest", "gemini-1.0-flash-latest"
+        ]
+        
+        if model_name in groq_models:
+            provider = ModelProvider.GROQ
+        elif model_name in ollama_models:
+            provider = ModelProvider.OLLAMA
+        elif model_name in google_models:
+            provider = ModelProvider.GOOGLE
+            
+        if provider is None:
+            # If we couldn't determine the provider, try to infer it from the model name
+            if any(name in model_name.lower() for name in ['llama', 'gemma', 'mistral', 'mixtral']):
+                provider = ModelProvider.GROQ
+            else:
+                raise ValueError(f"Could not determine provider for model: {model_name}")
+        
+        # Get the appropriate model instance directly
+        if provider == ModelProvider.GROQ:
+            try:
+                from langchain_groq import ChatGroq
+                api_key = get_api_key(provider)
+                return ChatGroq(
+                    model_name=model_name,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    groq_api_key=api_key,
+                    **kwargs
+                )
+            except ImportError:
+                logger.error("Groq not installed. Please install with: pip install langchain-groq")
+                raise
+        elif provider == ModelProvider.OLLAMA:
+            try:
+                from langchain_community.llms import Ollama
+                if "OLLAMA_API_BASE" not in os.environ:
+                    os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
+                return Ollama(
+                    model=model_name,
+                    temperature=temperature,
+                    num_predict=max_tokens,
+                    **kwargs
+                )
+            except ImportError:
+                logger.error("Ollama not installed. Please install with: pip install langchain-community")
+                raise
+        elif provider == ModelProvider.GOOGLE:
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                api_key = get_api_key(provider)
+                return ChatGoogleGenerativeAI(
+                    model=model_name,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    google_api_key=api_key,
+                    **kwargs
+                )
+            except ImportError:
+                logger.error("Google Generative AI not installed. Please install with: pip install langchain-google-genai")
+                raise
+        else:
+            raise ValueError(f"Unsupported model provider: {provider}")
+>>>>>>> 7064587 (Optimised the output response)
         
     except Exception as e:
         logger.error(f"Error initializing model {model_name}: {str(e)}")
@@ -238,6 +338,7 @@ def get_embedding_instance(
     # Set API keys if provided
     if api_keys:
         set_api_keys(api_keys)
+<<<<<<< HEAD
     
     # Try to infer provider from model_name if not provided
     if provider is None:
@@ -266,6 +367,29 @@ def get_embedding_instance(
     except Exception as e:
         logger.error(f"Error initializing embedding model {model_name}: {str(e)}")
         raise
+=======
+        
+    # Try to determine provider from model name if not specified
+    if provider is None:
+        if model_name in ["llama3-70b-8192", "llama3-8b-8192", "gemma-7b-it", "mixtral-8x7b-32768", "llama2-70b-4096", "gemma2-9b-it", "llama-3.1-8b-instant"]:
+            provider = ModelProvider.GROQ
+        elif model_name in ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-1.0-pro-latest"]:
+            provider = ModelProvider.GOOGLE
+        else:
+            # Default to Groq for unknown models
+            provider = ModelProvider.GROQ
+    
+    # Get the appropriate embedding model based on provider
+    if provider == ModelProvider.GROQ:
+        logger.info("Using default embeddings")
+        from langchain.embeddings import FakeEmbeddings
+        return FakeEmbeddings(size=384)  # Return fake embeddings
+    elif provider == ModelProvider.GOOGLE:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(model=model_name, **kwargs)
+    else:
+        raise ValueError(f"Unsupported provider for embeddings: {provider}")
+>>>>>>> 7064587 (Optimised the output response)
 
 def get_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", **kwargs) -> Any:
     """
@@ -278,6 +402,7 @@ def get_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", *
     Returns:
         An instance of the requested embeddings model
     """
+<<<<<<< HEAD
     try:
         logger.info(f"Attempting to initialize embeddings model: {model_name}")
         
@@ -320,6 +445,27 @@ def get_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", *
                 logger.error("FakeEmbeddings not available. Please install langchain-community")
                 raise
             
+=======
+    logger.info("Using default embeddings")
+    from langchain.embeddings import FakeEmbeddings
+    return FakeEmbeddings(size=384)  # Return fake embeddings
+
+def get_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", **kwargs) -> Any:
+    """
+    Get an embeddings model instance.
+    
+    Args:
+        model_name: Name of the embeddings model to load
+        **kwargs: Additional model-specific parameters
+        
+    Returns:
+        An instance of the requested embeddings model
+    """
+    logger.info("Using default embeddings")
+    from langchain.embeddings import FakeEmbeddings
+    try:
+        return FakeEmbeddings(size=384)  # Return fake embeddings
+>>>>>>> 7064587 (Optimised the output response)
     except Exception as e:
         logger.error(f"Critical error initializing embeddings model {model_name}: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
