@@ -80,6 +80,17 @@
    > - For persistent storage, consider mounting a volume or using a cloud storage solution
    > - The app will automatically recreate the FAISS index from your documents on startup
 
+
+## 🔄 LangChain RAG Implementation
+
+This project uses LangChain's Retrieval-Augmented Generation (RAG) system to provide accurate answers from your policy documents:
+
+- **Document Processing**: Uses LangChain's document loaders and text splitters to process various document formats
+- **Vector Storage**: Implements FAISS vector database through LangChain for efficient similarity search
+- **Embedding Models**: Utilizes Hugging Face embedding models for semantic understanding
+- **Retrieval Chain**: Employs LangChain's RetrievalQA chain for context-aware responses
+- **Source Attribution**: Provides transparent source references for all generated answers
+
 ## 🚀 Deployment with FAISS Storage
 
 ### Local FAISS Storage
@@ -260,15 +271,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🔄 LangChain RAG Implementation
-
-This project uses LangChain's Retrieval-Augmented Generation (RAG) system to provide accurate answers from your policy documents:
-
-- **Document Processing**: Uses LangChain's document loaders and text splitters to process various document formats
-- **Vector Storage**: Implements FAISS vector database through LangChain for efficient similarity search
-- **Embedding Models**: Utilizes Hugging Face embedding models for semantic understanding
-- **Retrieval Chain**: Employs LangChain's RetrievalQA chain for context-aware responses
-- **Source Attribution**: Provides transparent source references for all generated answers
 
 ## 🙏 Acknowledgments
 
