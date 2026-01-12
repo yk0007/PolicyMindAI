@@ -34,6 +34,8 @@ class SectionType(Enum):
     COVERAGE = "coverage"
     EXCLUSION = "exclusion"
     BENEFIT = "benefit"
+    TERMS = "terms"
+    CLAIMS = "claims"
 
 
 @dataclass
@@ -206,15 +208,7 @@ class SemanticChunker:
         position = 0
         
         # First, extract tables (highest priority - never split)
-        tables = self._extract_tables(text)
-        
-        # Sort tables by position
-        table_positions = []
-        for table in tables:
-            pos = text.find(table)
-            if pos >= 0:
-                table_positions.append((pos, pos + len(table), table))
-        table_positions.sort()
+        table_positions = self._extract_tables(text)
         
         # Build sections from text, preserving tables
         current_pos = 0
@@ -225,13 +219,21 @@ class SemanticChunker:
                 if pre_text:
                     sections.extend(self._split_into_sections(pre_text))
             
-            # Add table as atomic section
-            sections.append(DocumentSection(
-                content=table_text,
-                section_type=SectionType.TABLE,
-                is_atomic=True,
-                metadata={'type': 'table'}
-            ))
+            # Add table as atomic section(s)
+            table_chunks = self._split_large_table(table_text)
+            for idx, table_chunk in enumerate(table_chunks):
+                table_metadata = {'type': 'table'}
+                if len(table_chunks) > 1:
+                    table_metadata.update({
+                        'table_part': idx + 1,
+                        'table_parts': len(table_chunks)
+                    })
+                sections.append(DocumentSection(
+                    content=table_chunk,
+                    section_type=SectionType.TABLE,
+                    is_atomic=True,
+                    metadata=table_metadata
+                ))
             current_pos = end
         
         # Add remaining text after last table
@@ -246,26 +248,128 @@ class SemanticChunker:
         
         return sections
     
-    def _extract_tables(self, text: str) -> List[str]:
-        """Extract table content from text."""
+    def _extract_tables(self, text: str) -> List[Tuple[int, int, str]]:
+        """Extract table content with positions from text."""
         tables = []
         
         for pattern in self.table_patterns:
-            matches = re.findall(pattern, text, re.MULTILINE)
-            for match in matches:
-                if match.strip() and len(match) > 20:  # Minimum table size
-                    tables.append(match)
+            for match in re.finditer(pattern, text, re.MULTILINE):
+                table_text = match.group(0)
+                if not table_text.strip() or len(table_text) <= 20:
+                    continue
+                start, end = match.span()
+                if self._overlaps_existing_table(tables, start, end):
+                    continue
+                tables.append((start, end, table_text))
         
-        # Deduplicate
-        seen = set()
-        unique_tables = []
-        for table in tables:
-            table_key = table.strip()[:100]
-            if table_key not in seen:
-                seen.add(table_key)
-                unique_tables.append(table)
+        tables.sort(key=lambda item: item[0])
+        return tables
+
+    def _overlaps_existing_table(
+        self,
+        tables: List[Tuple[int, int, str]],
+        start: int,
+        end: int
+    ) -> bool:
+        """Check if a table span overlaps an existing table."""
+        for existing_start, existing_end, _ in tables:
+            if start < existing_end and end > existing_start:
+                return True
+        return False
+
+    def _split_large_table(self, table_text: str) -> List[str]:
+        """Split oversized tables into multiple chunks."""
+        stripped = table_text.strip()
+        if not stripped:
+            return []
         
-        return unique_tables
+        tokens = estimate_tokens(stripped)
+        if tokens <= self.max_table_tokens:
+            return [table_text]
+        
+        lines = stripped.splitlines()
+        if len(lines) < 3:
+            return [table_text]
+        
+        if lines[0].startswith("```table") and lines[-1].strip() == "```":
+            header_lines = lines[1:3]
+            row_lines = lines[3:-1]
+            return self._split_table_lines(
+                lines[0],
+                header_lines,
+                row_lines,
+                lines[-1]
+            )
+        
+        if lines[0].lstrip().startswith("|") and lines[1].lstrip().startswith("|"):
+            header_lines = lines[:2]
+            row_lines = lines[2:]
+            return self._split_table_lines("", header_lines, row_lines, "")
+        
+        if "\t" in stripped:
+            header_lines = [lines[0]]
+            row_lines = lines[1:]
+            return self._split_table_lines("", header_lines, row_lines, "")
+        
+        return [table_text]
+
+    def _split_table_lines(
+        self,
+        fence_start: str,
+        header_lines: List[str],
+        row_lines: List[str],
+        fence_end: str
+    ) -> List[str]:
+        """Split table rows into chunks while preserving headers."""
+        chunks = []
+        if not row_lines:
+            return ["\n".join([l for l in [fence_start, *header_lines, fence_end] if l])]
+        
+        header_block = "\n".join([l for l in [fence_start, *header_lines] if l])
+        footer_block = fence_end if fence_end else ""
+        header_tokens = estimate_tokens("\n".join([header_block, footer_block]).strip())
+        
+        current_rows = []
+        current_tokens = header_tokens
+        
+        for row in row_lines:
+            row_tokens = estimate_tokens(row)
+            if current_rows and current_tokens + row_tokens > self.max_table_tokens:
+                chunks.append(self._render_table_chunk(
+                    fence_start,
+                    header_lines,
+                    current_rows,
+                    fence_end
+                ))
+                current_rows = [row]
+                current_tokens = header_tokens + row_tokens
+            else:
+                current_rows.append(row)
+                current_tokens += row_tokens
+        
+        if current_rows:
+            chunks.append(self._render_table_chunk(
+                fence_start,
+                header_lines,
+                current_rows,
+                fence_end
+            ))
+        
+        return chunks
+
+    def _render_table_chunk(
+        self,
+        fence_start: str,
+        header_lines: List[str],
+        row_lines: List[str],
+        fence_end: str
+    ) -> str:
+        """Render a table chunk with preserved headers."""
+        parts = [line for line in [fence_start, *header_lines] if line]
+        parts.extend(row_lines)
+        if fence_end:
+            parts.append(fence_end)
+        return "\n".join(parts)
     
     def _split_into_sections(self, text: str) -> List[DocumentSection]:
         """
@@ -345,7 +449,9 @@ class SemanticChunker:
                     elif section_name == 'exclusion':
                         return SectionType.EXCLUSION
                     elif section_name == 'terms':
-                        return SectionType.BENEFIT
+                        return SectionType.TERMS
+                    elif section_name == 'claims':
+                        return SectionType.CLAIMS
         
         return SectionType.PARAGRAPH
     
@@ -544,23 +650,50 @@ class SemanticChunker:
         if len(chunks) <= 1 or self.chunk_overlap <= 0:
             return chunks
         
+        original_texts = [chunk.get('text', '') for chunk in chunks]
+        overlap_prefix = "[...] "
+        overlap_separator = "\n\n"
+        overhead_tokens = estimate_tokens(f"{overlap_prefix}{overlap_separator}")
+        overlap_budget = max(self.chunk_overlap - overhead_tokens, 0)
+        
         for i in range(1, len(chunks)):
             # Skip adding overlap to tables
             if chunks[i].get('metadata', {}).get('is_table'):
                 continue
             
-            prev_text = chunks[i-1]['text']
-            
-            # Get last N words from previous chunk
-            words = prev_text.split()
-            overlap_words = words[-min(self.chunk_overlap, len(words)):]
-            overlap_text = ' '.join(overlap_words)
+            prev_text = original_texts[i - 1]
+            overlap_text = self._get_overlap_text(prev_text, overlap_budget)
             
             if overlap_text:
-                chunks[i]['text'] = f"[...] {overlap_text}\n\n{chunks[i]['text']}"
+                new_text = f"{overlap_prefix}{overlap_text}{overlap_separator}{chunks[i]['text']}"
+                chunks[i]['text'] = new_text
                 chunks[i]['metadata']['has_overlap'] = True
+                chunks[i]['metadata']['token_count'] = estimate_tokens(new_text)
         
         return chunks
+
+    def _get_overlap_text(self, text: str, max_tokens: int) -> str:
+        """Extract trailing text up to a token budget."""
+        if max_tokens <= 0 or not text:
+            return ""
+        
+        if TIKTOKEN_AVAILABLE:
+            try:
+                encoder = tiktoken.get_encoding("cl100k_base")
+                tokens = encoder.encode(text)
+                if not tokens:
+                    return ""
+                overlap_tokens = tokens[-max_tokens:]
+                return encoder.decode(overlap_tokens).strip()
+            except Exception:
+                pass
+        
+        words = text.split()
+        if not words:
+            return ""
+        max_words = max(int(max_tokens / 1.3), 1)
+        overlap_words = words[-min(max_words, len(words)):]
+        return " ".join(overlap_words).strip()
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ from rag.document_loader import (
     clean_text,
     extract_text_from_file,
 )
+from rag.chunker import estimate_tokens
 
 
 class TestIsInsuranceDocument:
@@ -138,11 +139,16 @@ class TestProcessDocument:
     def test_chunk_size_respected(self, temp_txt):
         """Chunks should respect size limits (approximately)."""
         chunk_size = 200
-        docs = process_document(temp_txt, chunk_size=chunk_size)
+        chunk_overlap = 50
+        docs = process_document(
+            temp_txt,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
         
         for doc in docs:
             # Allow some flexibility due to splitting by sentences
-            assert len(doc.page_content) <= chunk_size * 1.5
+            assert estimate_tokens(doc.page_content) <= chunk_size + chunk_overlap
     
     def test_nonexistent_file_raises_error(self):
         """Non-existent file should raise FileNotFoundError."""

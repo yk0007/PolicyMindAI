@@ -109,7 +109,7 @@ OFF_TOPIC_EXAMPLES = [
 # =============================================================================
 
 POLICY_KEYWORDS = frozenset({
-    'insurance', 'policy', 'premium', 'coverage', 'benefit', 'claim', 'claims',
+    'insurance', 'policy', 'premium', 'coverage', 'benefit', 'benefits', 'claim', 'claims',
     'deductible', 'copay', 'copayment', 'coinsurance', 'exclusion', 'exclusions',
     'rider', 'endorsement', 'underwriting', 'sum insured', 'insured', 'insurer',
     'policyholder', 'beneficiary', 'nominee', 'hospitalization', 'outpatient',
@@ -132,6 +132,13 @@ OFF_TOPIC_PATTERNS = [
     r'^(hello|hi|hey|good morning|good evening)\s*[.!?]?$',
     r'^(thanks?|thank you|ok|okay|bye|goodbye)\s*[.!?]?$',
 ]
+
+
+def _resolve_relevance_thresholds(relevance_threshold: float) -> Tuple[float, float]:
+    """Normalize thresholds into (partial, relevant) cutoffs."""
+    partial_threshold = max(min(relevance_threshold, 1.0), 0.0)
+    relevant_threshold = min(partial_threshold * 2, 1.0)
+    return partial_threshold, relevant_threshold
 
 
 # =============================================================================
@@ -186,12 +193,17 @@ class EmbeddingQueryClassifier:
             logger.error(f"Failed to initialize query classifier: {e}")
             self._initialized = False
     
-    def classify(self, query: str) -> Tuple[QueryRelevance, float, str]:
+    def classify(
+        self,
+        query: str,
+        relevance_threshold: float = 0.15
+    ) -> Tuple[QueryRelevance, float, str]:
         """
         Classify a query using embedding similarity.
         
         Args:
             query: The user's question
+            relevance_threshold: Minimum score for partial relevance
             
         Returns:
             Tuple of (relevance, confidence, explanation)
@@ -201,7 +213,10 @@ class EmbeddingQueryClassifier:
         
         if not self._initialized or self.embeddings is None:
             # Fall back to keyword-based
-            return _keyword_based_classify(query)
+            return _keyword_based_classify(
+                query,
+                relevance_threshold=relevance_threshold
+            )
         
         try:
             # Embed the query
@@ -223,6 +238,10 @@ class EmbeddingQueryClassifier:
             max_off_topic_sim = float(np.max(off_topic_similarities))
             avg_off_topic_sim = float(np.mean(off_topic_similarities))
             
+            partial_threshold, relevant_threshold = _resolve_relevance_thresholds(
+                relevance_threshold
+            )
+            
             # Decision logic
             policy_score = (max_policy_sim * 0.7 + avg_policy_sim * 0.3)
             off_topic_score = (max_off_topic_sim * 0.7 + avg_off_topic_sim * 0.3)
@@ -230,14 +249,14 @@ class EmbeddingQueryClassifier:
             # Calculate relative confidence
             score_diff = policy_score - off_topic_score
             
-            if score_diff > 0.1:
+            if score_diff > 0.1 and policy_score >= relevant_threshold:
                 # Clearly policy-related
                 return (
                     QueryRelevance.RELEVANT,
                     min(policy_score, 1.0),
                     "Query is relevant to policy documents."
                 )
-            elif score_diff > 0.0:
+            elif score_diff > 0.0 and policy_score >= partial_threshold:
                 # Somewhat policy-related
                 return (
                     QueryRelevance.PARTIALLY_RELEVANT,
@@ -254,7 +273,10 @@ class EmbeddingQueryClassifier:
                 
         except Exception as e:
             logger.warning(f"Embedding classification failed: {e}")
-            return _keyword_based_classify(query)
+            return _keyword_based_classify(
+                query,
+                relevance_threshold=relevance_threshold
+            )
     
     def _cosine_similarity(
         self, 
@@ -290,7 +312,10 @@ def get_embedding_classifier(embeddings_model: Any = None) -> EmbeddingQueryClas
 # Keyword-Based Classification (Fallback)
 # =============================================================================
 
-def _keyword_based_classify(query: str) -> Tuple[QueryRelevance, float, str]:
+def _keyword_based_classify(
+    query: str,
+    relevance_threshold: float = 0.15
+) -> Tuple[QueryRelevance, float, str]:
     """Fallback keyword-based classification."""
     if not query or not query.strip():
         return (
@@ -302,35 +327,26 @@ def _keyword_based_classify(query: str) -> Tuple[QueryRelevance, float, str]:
     query_lower = query.lower().strip()
     
     # Check off-topic patterns
-    for pattern in OFF_TOPIC_PATTERNS:
-        if re.search(pattern, query_lower, re.IGNORECASE):
-            return (
-                QueryRelevance.OFF_TOPIC,
-                0.9,
-                get_rejection_message(query)
-            )
+    if check_off_topic_patterns(query_lower):
+        return (
+            QueryRelevance.OFF_TOPIC,
+            0.9,
+            get_rejection_message(query)
+        )
     
     # Calculate keyword score
-    words = set(re.findall(r'\b\w+\b', query_lower))
+    score = calculate_keyword_score(query_lower)
+    partial_threshold, relevant_threshold = _resolve_relevance_thresholds(
+        relevance_threshold
+    )
     
-    matching_keywords = 0
-    for keyword in POLICY_KEYWORDS:
-        if ' ' in keyword:
-            if keyword in query_lower:
-                matching_keywords += 2
-        elif keyword in words:
-            matching_keywords += 1
-    
-    word_count = max(len(words), 1)
-    score = min(matching_keywords / word_count, 1.0)
-    
-    if score >= 0.3:
+    if score >= relevant_threshold:
         return (
             QueryRelevance.RELEVANT,
             score,
             "Query is relevant to policy documents."
         )
-    elif score >= 0.15:
+    elif score >= partial_threshold:
         return (
             QueryRelevance.PARTIALLY_RELEVANT,
             score,
@@ -363,7 +379,7 @@ def classify_query(
     
     Args:
         query: The user's question
-        relevance_threshold: Minimum score for relevance
+        relevance_threshold: Minimum score for partial relevance
         embeddings_model: Optional embeddings model for semantic classification
         use_embeddings: Whether to use embedding-based classification
         
@@ -378,6 +394,9 @@ def classify_query(
         )
     
     query = query.strip()
+    partial_threshold, relevant_threshold = _resolve_relevance_thresholds(
+        relevance_threshold
+    )
     
     # Quick check for obvious off-topic patterns
     query_lower = query.lower()
@@ -394,19 +413,32 @@ def classify_query(
     strong_policy_keywords = {'coverage', 'covered', 'policy', 'claim', 'insurance', 
                               'premium', 'benefit', 'exclusion', 'insured'}
     if words & strong_policy_keywords:
+        score = 0.9
+        if score >= relevant_threshold:
+            return (
+                QueryRelevance.RELEVANT,
+                score,
+                "Query is relevant to policy documents."
+            )
+        if score >= partial_threshold:
+            return (
+                QueryRelevance.PARTIALLY_RELEVANT,
+                score,
+                "Query may be related to policy documents."
+            )
         return (
-            QueryRelevance.RELEVANT,
-            0.9,
-            "Query is relevant to policy documents."
+            QueryRelevance.OFF_TOPIC,
+            1.0 - score,
+            get_rejection_message(query)
         )
     
     # Use embedding-based classification for ambiguous cases
     if use_embeddings and embeddings_model is not None:
         classifier = get_embedding_classifier(embeddings_model)
-        return classifier.classify(query)
+        return classifier.classify(query, relevance_threshold=relevance_threshold)
     
     # Fall back to keyword-based
-    return _keyword_based_classify(query)
+    return _keyword_based_classify(query, relevance_threshold=relevance_threshold)
 
 
 # =============================================================================
@@ -426,6 +458,39 @@ def get_rejection_message(query: str) -> str:
         "• **Costs** - Premiums, deductibles, and co-payments\n\n"
         "Please ask a question related to your uploaded policy documents."
     )
+
+
+def calculate_keyword_score(query: str) -> float:
+    """Calculate relevance score based on policy keywords."""
+    if not query or not query.strip():
+        return 0.0
+    
+    query_lower = query.lower().strip()
+    words = set(re.findall(r'\b\w+\b', query_lower))
+    
+    matching_keywords = 0
+    for keyword in POLICY_KEYWORDS:
+        if ' ' in keyword:
+            if keyword in query_lower:
+                matching_keywords += 2
+        elif keyword in words:
+            matching_keywords += 1
+    
+    word_count = max(len(words), 1)
+    return min(matching_keywords / word_count, 1.0)
+
+
+def check_off_topic_patterns(query: str) -> bool:
+    """Check if a query matches known off-topic patterns."""
+    if not query or not query.strip():
+        return False
+    
+    query_lower = query.lower().strip()
+    for pattern in OFF_TOPIC_PATTERNS:
+        if re.search(pattern, query_lower, re.IGNORECASE):
+            return True
+    
+    return False
 
 
 def get_suggested_policy_questions() -> List[str]:

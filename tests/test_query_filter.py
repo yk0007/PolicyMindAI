@@ -67,6 +67,15 @@ class TestQueryRelevance:
         assert isinstance(score, float)
         assert isinstance(message, str)
         assert 0.0 <= score <= 1.0
+    
+    def test_relevance_threshold_affects_classification(self):
+        """relevance_threshold should influence keyword-based classification."""
+        query = "What is the deductible?"
+        relevance, _, _ = classify_query(query, relevance_threshold=0.2, use_embeddings=False)
+        assert relevance == QueryRelevance.PARTIALLY_RELEVANT
+        
+        relevance, _, _ = classify_query(query, relevance_threshold=0.3, use_embeddings=False)
+        assert relevance == QueryRelevance.OFF_TOPIC
 
 
 class TestKeywordScoring:

@@ -152,6 +152,10 @@ class DocumentLoader:
             
         except Exception as e:
             logger.error(f"Error loading PDF {file_path}: {e}")
+            fallback_pages = self._fallback_pdf_extraction(file_path)
+            if fallback_pages:
+                logger.info("Using PyMuPDF fallback for PDF extraction")
+                return fallback_pages
             raise
     
     def _extract_tables_from_page(self, page) -> str:
@@ -300,8 +304,12 @@ def clean_text(text: str) -> str:
     if not text:
         return ""
     
-    # Normalize whitespace
-    text = re.sub(r'[ \t]+', ' ', text)
+    # Normalize whitespace while preserving paragraph breaks
+    lines = []
+    for line in text.splitlines():
+        normalized = re.sub(r'[ \t]+', ' ', line).rstrip()
+        lines.append(normalized)
+    text = '\n'.join(lines)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
     # Remove control characters

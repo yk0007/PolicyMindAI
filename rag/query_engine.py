@@ -145,14 +145,34 @@ def _pack_context(
         if current_tokens + doc_tokens > max_tokens:
             if context_parts:
                 break
-            words = doc_text.split()
-            truncated_words = words[:int(max_tokens * 0.75)]
-            doc_text = ' '.join(truncated_words)
+            target_tokens = max(int(max_tokens * 0.75), 1)
+            doc_text = _truncate_to_tokens(doc_text, target_tokens)
+            doc_tokens = estimate_tokens(doc_text)
         
         context_parts.append(doc_text)
         current_tokens += doc_tokens
     
     return "\n\n---\n\n".join(context_parts)
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to a token budget."""
+    if not text or max_tokens <= 0:
+        return ""
+    
+    try:
+        import tiktoken
+        encoder = tiktoken.get_encoding("cl100k_base")
+        tokens = encoder.encode(text)
+        if len(tokens) <= max_tokens:
+            return text
+        return encoder.decode(tokens[:max_tokens]).strip()
+    except Exception:
+        words = text.split()
+        if not words:
+            return ""
+        max_words = max(int(max_tokens / 1.3), 1)
+        return " ".join(words[:max_words]).strip()
 
 
 # =============================================================================
