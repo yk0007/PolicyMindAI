@@ -1,495 +1,435 @@
+"""
+PolicyMind AI - Insurance Policy Assistant
+
+AI-powered insurance policy analysis that helps you understand your policy
+in simple, easy-to-understand language.
+"""
+
 import os
-import re
-import time
+import logging
+import tempfile
+from datetime import datetime
+from typing import List, Dict, Any
+
 import streamlit as st
 from dotenv import load_dotenv
-import tempfile
-import fitz  # PyMuPDF
-from typing import List, Dict, Any, Optional, Tuple
-import json
-from datetime import datetime
-from enum import Enum
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO"),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 # Set page config
 st.set_page_config(
-    page_title="PolicyMind RAG",
+    page_title="PolicyMind AI",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Import necessary components after setting page config to avoid Streamlit errors
+# Import RAG components
 from rag.rag_index import get_or_create_vector_store
 from rag.query_engine import get_rag_response, get_suggested_questions
 from rag.document_loader import process_document, is_insurance_document
-from rag.model_utils import (
-    get_available_models,
-    set_api_keys,
-    get_llm_instance,
-    get_embedding_instance,
-    ModelProvider,
-    AVAILABLE_EMBEDDING_MODELS,
-    DEFAULT_API_KEYS,
-    MODEL_DISPLAY_NAMES
-)
+from rag.query_filter import is_query_relevant, get_suggested_policy_questions
+from rag.model_utils import get_llm_instance, get_embedding_instance, ModelProvider
 
-# Initialize session state variables
+# Fixed configuration
+EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+LLM_MODEL = "llama-3.3-70b-versatile"
+CHUNK_SIZE = 400
+CHUNK_OVERLAP = 50
+
+
+# =============================================================================
+# Session State
+# =============================================================================
+
 def init_session_state():
-    if 'conversation' not in st.session_state:
-        st.session_state.conversation = []
-    if 'uploaded_files' not in st.session_state:
-        st.session_state.uploaded_files = []
-    if 'vector_store' not in st.session_state:
-        st.session_state.vector_store = None
-    if 'model_provider' not in st.session_state:
-        st.session_state.model_provider = ModelProvider.GROQ  # Default to Groq
-    if 'model_provider_str' not in st.session_state:
-        st.session_state.model_provider_str = ModelProvider.GROQ.value  # String representation
-    if 'api_keys' not in st.session_state:
-        st.session_state.api_keys = {**DEFAULT_API_KEYS}  # Start with default keys
-    if 'selected_model' not in st.session_state:
-        st.session_state.selected_model = "llama3-70b-8192"  # Default model
-    if 'embedding_model' not in st.session_state:
-        st.session_state.embedding_model = "BAAI/bge-base-en-v1.5"  # Default embedding model
-    if 'suggested_questions' not in st.session_state:
-        st.session_state.suggested_questions = []
+    """Initialize session state."""
+    defaults = {
+        'conversation': [],
+        'uploaded_files': [],
+        'processed_documents': [],
+        'vector_store': None,
+        'suggested_questions': [],
+        'last_retrieval_info': None,
+    }
+    
+    for key, default in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
 
-# Initialize session state
+
 init_session_state()
 
-# Sidebar for model selection and API keys
-def sidebar():
+
+# =============================================================================
+# Sidebar
+# =============================================================================
+
+def render_sidebar():
+    """Render the sidebar."""
     with st.sidebar:
-        st.title("⚙️ Settings")
+        st.title("🛡️ PolicyMind AI")
+        st.caption("Your friendly insurance policy assistant")
         
-        # Model selection
-        st.subheader("Model Configuration")
+        st.markdown("---")
         
-        # Provider selection with display names
-        provider_options = [
-            (provider, MODEL_DISPLAY_NAMES.get(provider, provider.value)) 
-            for provider in [ModelProvider.GROQ, ModelProvider.OLLAMA, ModelProvider.GOOGLE]
-        ]
+        # Document upload section
+        st.subheader("📄 Upload Your Policy")
         
-        # Create a simple dropdown for provider selection
-        provider_options_display = [d for _, d in provider_options]
-        
-        # Get current provider string and convert to display name
-        current_provider_str = st.session_state.model_provider_str
-        current_provider = ModelProvider(current_provider_str)
-        current_provider_display = MODEL_DISPLAY_NAMES.get(current_provider, current_provider_str)
-        
-        # Find the index of the current provider in the display options
-        try:
-            current_index = provider_options_display.index(current_provider_display)
-        except ValueError:
-            current_index = 0
-        
-        # Create the selectbox with display names
-        selected_provider_display = st.selectbox(
-            "Select Model Provider",
-            provider_options_display,
-            index=current_index,
-            key="model_provider_selector"
-        )
-        
-        # Get the provider enum from the display name
-        selected_provider = next((p for p, d in provider_options if d == selected_provider_display), provider_options[0][0])
-        
-        # Update session state if provider changed
-        if st.session_state.model_provider_str != selected_provider.value:
-            st.session_state.model_provider = selected_provider
-            st.session_state.model_provider_str = selected_provider.value
-            # Reset the selected model when provider changes
-            models = get_available_models(selected_provider)
-            st.session_state.selected_model = models[0] if models else ""
-        
-        # Get available models for the selected provider
-        available_models = get_available_models(selected_provider)
-        
-        if available_models:
-            # Find the current model in the available models, default to first
-            current_model = st.session_state.selected_model
-            if current_model not in available_models and available_models:
-                current_model = available_models[0]
-            
-            selected_model = st.selectbox(
-                "Select Model",
-                available_models,
-                index=available_models.index(current_model) if current_model in available_models else 0,
-                key=f"model_selector_{selected_provider.value}"
-            )
-            st.session_state.selected_model = selected_model
-        
-        # Embedding model selection
-        st.subheader("Embedding Model")
-        embedding_model = st.selectbox(
-            "Select Embedding Model",
-            AVAILABLE_EMBEDDING_MODELS,
-            index=AVAILABLE_EMBEDDING_MODELS.index(st.session_state.embedding_model) 
-            if st.session_state.embedding_model in AVAILABLE_EMBEDDING_MODELS else 0,
-            key="embedding_model_selector"
-        )
-        st.session_state.embedding_model = embedding_model
-        
-        # API keys are loaded from environment variables or Streamlit secrets
-        # No API key input in the frontend for security
-        if selected_provider in [ModelProvider.GROQ, ModelProvider.GOOGLE]:
-            # Check if API keys are available in environment variables or secrets
-            if not os.environ.get("GROQ_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
-                if hasattr(st, 'secrets') and hasattr(st.secrets, 'secrets'):
-                    if not (st.secrets.secrets.get("GROQ_API_KEY") or st.secrets.secrets.get("GOOGLE_API_KEY")):
-                        st.warning("ℹ️ API keys must be set via environment variables or Streamlit secrets.")
-        
-        # Ollama settings (local, no API key needed)
-        elif selected_provider == ModelProvider.OLLAMA:
-            st.info("Ollama runs locally. Make sure the Ollama server is running.")
-            ollama_model = st.text_input(
-                "Ollama Model Name",
-                value=st.session_state.selected_model or "llama3"
-            )
-            if ollama_model:
-                st.session_state.selected_model = ollama_model
-        
-        # Document upload
-        st.subheader("Document Upload")
         uploaded_files = st.file_uploader(
-            "Upload PDF documents",
+            "Upload insurance policy PDFs",
             type=["pdf"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="Upload your insurance policy PDF to get started",
+            key="file_uploader"
         )
         
         if uploaded_files:
-            process_uploaded_files(uploaded_files)
+            _process_uploaded_files(uploaded_files)
         
-        # Display uploaded files
-        if st.session_state.uploaded_files:
-            st.subheader("Uploaded Files")
-            for i, file in enumerate(st.session_state.uploaded_files):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"📄 {file['name']}")
-                with col2:
-                    if st.button("❌", key=f"remove_{i}"):
-                        remove_file(i)
-
-# Process uploaded files
-def process_uploaded_files(uploaded_files):
-    for uploaded_file in uploaded_files:
-        if uploaded_file.name not in [f['name'] for f in st.session_state.uploaded_files]:
-            # Save the file to a temporary location
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                file_path = tmp_file.name
+        # Retrieval Metrics (only if we have data)
+        if st.session_state.last_retrieval_info:
+            st.markdown("---")
+            st.subheader("📊 Last Query Metrics")
             
-            # Process the file
-            try:
-                # Add to uploaded files list
-                st.session_state.uploaded_files.append({
-                    'name': uploaded_file.name,
-                    'path': file_path,
-                    'uploaded_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-                
-                # Update the vector store with the new document
-                update_vector_store()
-                
-                st.sidebar.success(f"Processed {uploaded_file.name}")
-            except Exception as e:
-                st.sidebar.error(f"Error processing {uploaded_file.name}: {str(e)}")
+            info = st.session_state.last_retrieval_info
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Chunks", info.get('num_retrieved', 0))
+            with col2:
+                st.metric("Tokens", info.get('context_tokens', 0))
+            
+            features = []
+            if info.get('used_hybrid'):
+                features.append("✅ Hybrid")
+            if info.get('used_reranking'):
+                features.append("✅ Rerank")
+            if features:
+                st.caption(" | ".join(features))
+            
+            if info.get('sources'):
+                with st.expander("📄 Retrieved Context", expanded=False):
+                    for i, source in enumerate(info['sources'][:3], 1):
+                        score = source.get('score', 0)
+                        st.markdown(f"**Chunk {i}** (Score: {score:.3f})")
+                        st.code(source.get('preview', '')[:200], language=None)
 
-# Remove a file
-def remove_file(file_index):
-    if 0 <= file_index < len(st.session_state.uploaded_files):
-        removed_file = st.session_state.uploaded_files.pop(file_index)
-        # Update the vector store
-        update_vector_store()
-        st.sidebar.success(f"Removed {removed_file['name']}")
-        # Rerun to update the UI
-        st.rerun()
 
-# Update the vector store with all uploaded files
-def update_vector_store():
+def _process_uploaded_files(uploaded_files):
+    """Process newly uploaded files with validation."""
+    for uploaded_file in uploaded_files:
+        # Skip if already processed
+        if uploaded_file.name in [f['name'] for f in st.session_state.uploaded_files]:
+            continue
+        
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            file_path = tmp_file.name
+        
+        try:
+            # Check if it looks like an insurance document
+            if not _is_policy_document(file_path):
+                st.sidebar.error(
+                    f"❌ **'{uploaded_file.name}'** doesn't appear to be an insurance policy.\n\n"
+                    "Please upload an insurance policy document (health, life, auto, home insurance, etc.)"
+                )
+                os.unlink(file_path)  # Delete temp file
+                continue
+            
+            st.session_state.uploaded_files.append({
+                'name': uploaded_file.name,
+                'path': file_path,
+                'uploaded_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            _update_vector_store()
+            st.sidebar.success(f"✅ {uploaded_file.name} loaded!")
+            
+        except Exception as e:
+            st.sidebar.error(f"Error with {uploaded_file.name}: {str(e)}")
+            logger.error(f"File processing error: {str(e)}", exc_info=True)
+
+
+def _is_policy_document(file_path: str) -> bool:
+    """Check if the document appears to be an insurance policy."""
+    try:
+        # Quick check using existing function
+        if is_insurance_document(file_path):
+            return True
+        
+        # Additional check - read first page and look for keywords
+        import fitz
+        doc = fitz.open(file_path)
+        if len(doc) == 0:
+            return False
+        
+        # Get text from first few pages
+        text = ""
+        for page_num in range(min(3, len(doc))):
+            text += doc[page_num].get_text().lower()
+        doc.close()
+        
+        # Insurance document keywords
+        insurance_keywords = [
+            'insurance', 'policy', 'premium', 'coverage', 'insured', 'insurer',
+            'claim', 'benefits', 'exclusion', 'sum assured', 'sum insured',
+            'hospitalization', 'medical', 'health', 'life insurance', 'term plan',
+            'policyholder', 'nominee', 'rider', 'indemnity', 'underwriting'
+        ]
+        
+        # Count keyword matches
+        matches = sum(1 for kw in insurance_keywords if kw in text)
+        
+        # Need at least 3 insurance-related keywords
+        return matches >= 3
+        
+    except Exception as e:
+        logger.warning(f"Could not validate document: {e}")
+        return True  # Allow if we can't check
+
+
+def _update_vector_store():
+    """Update the vector store with documents."""
     if not st.session_state.uploaded_files:
         st.session_state.vector_store = None
+        st.session_state.processed_documents = []
         st.session_state.suggested_questions = []
         return
     
     try:
-        with st.spinner("Processing documents..."):
-            # Get embedding instance based on selected provider and model
-            embedding = get_embedding_instance(
-                model_name=st.session_state.embedding_model,
-                provider=st.session_state.model_provider,
-                api_keys=st.session_state.api_keys
-            )
+        with st.spinner("📖 Reading your policy..."):
+            embedding = get_embedding_instance(model_name=EMBEDDING_MODEL)
             
-            # Process all uploaded files
-            documents = []
+            all_documents = []
+            all_docs_for_bm25 = []
+            
             for file_info in st.session_state.uploaded_files:
                 try:
-                    # Process the document using rag.document_loader
                     docs = process_document(
                         file_path=file_info['path'],
-                        metadata={"source": file_info['name']}
+                        chunk_size=CHUNK_SIZE,
+                        chunk_overlap=CHUNK_OVERLAP,
+                        metadata={"source": file_info['name']},
+                        use_semantic_chunking=True
                     )
                     
-                    # Check if the document is insurance-related using the first chunk
-                    if docs and not is_insurance_document(docs[0].page_content):
-                        st.sidebar.warning(f"Document {file_info['name']} may not be insurance-related. Some features may not work as expected.")
+                    all_documents.extend(docs)
                     
-                    documents.extend(docs)
+                    for doc in docs:
+                        all_docs_for_bm25.append({
+                            'text': doc.page_content,
+                            'page_content': doc.page_content,
+                            'metadata': doc.metadata
+                        })
+                        
                 except Exception as e:
-                    st.sidebar.error(f"Error processing {file_info['name']}: {str(e)}")
+                    st.sidebar.error(f"Error with {file_info['name']}: {str(e)}")
+                    logger.error(f"Document error: {str(e)}", exc_info=True)
             
-            if documents:
-                # Combine all document text for suggested questions
-                combined_text = "\n\n".join(doc.page_content for doc in documents[:10])  # Limit to first 10 chunks
+            if all_documents:
+                st.session_state.processed_documents = all_docs_for_bm25
+                _generate_suggested_questions(all_documents)
                 
-                # Generate suggested questions
-                try:
-                    llm = get_llm_instance(
-                        st.session_state.model_provider,
-                        st.session_state.selected_model,
-                        st.session_state.api_keys
-                    )
-                    st.session_state.suggested_questions = get_suggested_questions(combined_text, llm)
-                except Exception as e:
-                    st.sidebar.warning(f"Could not generate suggested questions: {str(e)}")
-                    st.session_state.suggested_questions = []
-                
-                # Create or update the vector store
                 doc_paths = [f['path'] for f in st.session_state.uploaded_files]
                 st.session_state.vector_store = get_or_create_vector_store(
-                    documents=documents,
+                    documents=all_documents,
                     embeddings=embedding,
                     doc_paths=doc_paths
                 )
                 
-                st.sidebar.success("Document index updated successfully!")
     except Exception as e:
-        st.sidebar.error(f"Error updating document index: {str(e)}")
-        st.session_state.vector_store = None
+        st.sidebar.error(f"Error processing: {str(e)}")
+        logger.error(f"Vector store error: {str(e)}", exc_info=True)
 
-# Display suggested questions
-def display_suggested_questions():
-    if st.session_state.get('suggested_questions') and not st.session_state.get('processing_suggested_question', False):
-        st.subheader("Suggested Questions")
-        cols = st.columns(2)  # Create 2 columns for better layout
-        
-        for i, question in enumerate(st.session_state.suggested_questions):
-            with cols[i % 2]:  # Alternate between columns
-                if st.button(
-                    question,
-                    key=f"suggested_q_{i}",
-                    use_container_width=True,
-                    help="Click to ask this question"
-                ):
-                    # Set flag to prevent recursion
-                    st.session_state.processing_suggested_question = True
-                    # Set the question as the current prompt and process it
-                    process_user_question(question)
-                    # Clear the flag after processing
-                    st.session_state.processing_suggested_question = False
-                    # Force a rerun to show the processing
-                    st.rerun()
 
-def display_source(source, index):
-    """Display a source with preview, metadata, and page numbers."""
-    import time
-    import hashlib
-    from pathlib import Path
-    
-    # Get source attributes with fallbacks
-    source_path = source.get('path', '')
-    source_name = Path(source_path).name if source_path else 'unknown'
-    page_num = source.get('page', 0)
-    
-    # Create a unique key for the source
-    content_hash = hashlib.md5(str(source).encode()).hexdigest()[:8]
-    source_key = f"src_{index}_{source_name[:15]}_pg{page_num}_{content_hash}"
-    source_key = ''.join(c if c.isalnum() or c in '_-' else '_' for c in source_key)
-    
-    # Format the expander title with page number if available
-    expander_title = f"🔍 Source {index + 1}: {source_name}"
-    if page_num and page_num != 'N/A':
-        expander_title += f" (Page {page_num})"
-    
-    with st.expander(expander_title, expanded=False):
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            # Show relevance score if available
-            if 'score' in source:
-                st.metric("Relevance", f"{source['score']:.2f}")
-            
-            # Show page number prominently
-            if page_num and page_num != 'N/A':
-                st.metric("Page", page_num)
-            
-            # View in document button
-            if source_path and os.path.exists(source_path):
-                if st.button("View in Document", key=f"view_doc_{source_key}"):
-                    st.session_state.current_document = source_path
-                    st.session_state.current_page = page_num if page_num != 'N/A' else 1
-                    st.rerun()
-            
-            # Show document metadata if available
-            if 'metadata' in source and source['metadata']:
-                st.caption("Metadata")
-                for k, v in source['metadata'].items():
-                    if k not in ['page', 'source', 'score'] and v:
-                        st.text(f"{k}: {v}")
-        
-        with col2:
-            # Show content preview with better formatting
-            st.caption("Content Preview")
-            
-            # Get preview text with fallback
-            preview = source.get('preview', '')
-            if not preview and 'content' in source:
-                preview = source['content']
-            
-            if not preview:
-                st.warning("No preview available")
-                return
-            
-            # Display the preview with syntax highlighting for code/structured content
-            st.markdown("```\n" + preview[:500] + ("..." if len(preview) > 500 else "") + "\n```")
-            
-            # Show document path if available
-            if source_path:
-                st.caption(f"Source: {source_path}")
-
-def process_user_question(question):
-    """Process a user question and generate a response."""
-    # Add user message to chat
-    st.session_state.conversation.append({"role": "user", "content": question})
-    
-    with st.chat_message("user"):
-        st.markdown(question)
-    
-    # Get LLM instance
+def _generate_suggested_questions(documents):
+    """Generate suggested questions."""
     try:
-        llm = get_llm_instance(
-            st.session_state.model_provider,
-            st.session_state.selected_model,
-            st.session_state.api_keys
-        )
-        
-        # Get response from RAG
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing documents..."):
-                response = get_rag_response(
-                    question,
-                    st.session_state.vector_store,
-                    llm
-                )
-                
-                # Display response
-                response_placeholder = st.empty()
-                
-                # Get the raw answer text
-                clean_answer = response["answer"]
-                
-                # Add to conversation with sources and used snippets
-                st.session_state.conversation.append({
-                    "role": "assistant",
-                    "content": clean_answer,
-                    "sources": response.get("sources", []),
-                    "used_snippets": response.get("used_snippets", [])
-                })
-                
-                # Display the response with preserved newlines
-                st.markdown(clean_answer)
-                
-                # Show sources if available
-                if "sources" in response and response["sources"]:
-                    st.markdown("---")
-                    st.markdown("### 📚 Sources")
-                    st.caption("These are the sources used to generate the answer:")
-                    
-                    # Display each source with preview
-                    for i, source in enumerate(response["sources"]):
-                        display_source(source, i)
-                    
-                    # Add a note about LangChain RAG
-                    st.info("This answer was generated using LangChain's Retrieval-Augmented Generation (RAG) system, which enhances responses with information from your documents.")
-    
+        combined_text = "\n\n".join(doc.page_content for doc in documents[:8])
+        llm = get_llm_instance(ModelProvider.GROQ, LLM_MODEL)
+        st.session_state.suggested_questions = get_suggested_questions(combined_text, llm)
     except Exception as e:
-        st.error(f"Error generating response: {str(e)}")
-        st.exception(e)  # Show full error for debugging
+        logger.warning(f"Could not generate questions: {str(e)}")
+        st.session_state.suggested_questions = get_suggested_policy_questions()[:4]
 
-# Main chat interface
-def chat_interface():
-    st.title("📄 PolicyMind RAG")
+
+# =============================================================================
+# Chat Interface
+# =============================================================================
+
+def render_chat():
+    """Render the main chat interface."""
+    # Welcome screen if no documents
+    if not st.session_state.vector_store:
+        st.markdown("""
+        # 🛡️ Welcome to PolicyMind AI
+        
+        I'm your friendly insurance policy assistant. I help you understand your policy in **simple, plain language**.
+        
+        ### Getting Started
+        1. **Upload your insurance policy PDF** using the sidebar
+        2. **Ask me anything** about your coverage
+        
+        I'll explain everything in easy-to-understand terms - no insurance jargon! 🙂
+        """)
+        return
     
-    # Display document viewer if a document is selected
-    if 'current_document' in st.session_state and st.session_state.current_document:
-        st.sidebar.title("📑 Document Viewer")
-        with st.sidebar.expander("Viewing Document", expanded=True):
-            st.write(f"**File:** {os.path.basename(st.session_state.current_document)}")
-            st.write(f"**Page:** {st.session_state.current_page if 'current_page' in st.session_state else 'N/A'}")
-            
-            # Display document content (simplified - could be enhanced with actual document viewer)
-            try:
-                with open(st.session_state.current_document, 'rb') as f:
-                    # This is a placeholder - in a real app, you'd use a proper PDF viewer
-                    st.warning("Document viewer would display here. For now, please refer to the source previews.")
-            except Exception as e:
-                st.error(f"Could not display document: {str(e)}")
-            
-            if st.button("Close Document"):
-                del st.session_state.current_document
-                if 'current_page' in st.session_state:
-                    del st.session_state.current_page
-                st.rerun()
+    st.markdown("## 🛡️ PolicyMind AI")
+    st.caption("Ask me anything about your policy - I'll explain it simply!")
     
     # Display conversation
     for message in st.session_state.conversation:
-        with st.chat_message(message["role"]):
+        with st.chat_message(message["role"], avatar="🧑" if message["role"] == "user" else "🛡️"):
             st.markdown(message["content"])
-            
-            # Display sources if available
-            if message["role"] == "assistant" and message.get("sources"):
-                st.markdown("---")
-                st.markdown("### 📚 Sources")
-                st.caption("These are the sources used to generate the answer:")
-                
-                # Display each source with preview
-                for i, source in enumerate(message["sources"]):
-                    display_source(source, i)
     
-    # Display suggested questions if no conversation yet
-    if not st.session_state.conversation and st.session_state.vector_store:
-        display_suggested_questions()
+    # Show suggested questions if no conversation
+    if not st.session_state.conversation:
+        _display_suggested_questions()
     
     # Chat input
-    if prompt := st.chat_input("Ask a question about your documents...", key="chat_input"):
-        # Check if we have a vector store and a model selected
-        if st.session_state.vector_store is None:
-            st.error("Please upload and process at least one document first.")
-            return
-            
-        if not st.session_state.selected_model or not st.session_state.model_provider:
-            st.error("Please select a model and provide the necessary API key.")
-            return
-        
-        # Process the user's question
-        process_user_question(prompt)
-        # Force a rerun to show the processing
-        st.rerun()
+    if prompt := st.chat_input("Ask about your policy..."):
+        _process_question(prompt)
 
-# Main function
-def main():
-    # Sidebar
-    sidebar()
+
+def _display_suggested_questions():
+    """Display suggested questions."""
+    if not st.session_state.suggested_questions:
+        return
     
-    # Main content
-    chat_interface()
+    st.markdown("### 💡 Try asking:")
+    cols = st.columns(2)
+    
+    for i, question in enumerate(st.session_state.suggested_questions[:4]):
+        with cols[i % 2]:
+            if st.button(f"❓ {question}", key=f"q_{i}", use_container_width=True):
+                _process_question(question)
+                st.rerun()
+
+
+def _is_greeting(text: str) -> bool:
+    """Check if the text is a greeting."""
+    greetings = {'hi', 'hello', 'hey', 'hii', 'hiii', 'helo', 'hallo', 
+                 'good morning', 'good afternoon', 'good evening', 'howdy'}
+    text_lower = text.lower().strip().rstrip('!.,?')
+    return text_lower in greetings or text_lower.startswith(('hi ', 'hello ', 'hey '))
+
+
+def _process_question(question: str):
+    """Process a user question."""
+    if not st.session_state.vector_store:
+        st.error("Please upload a policy document first.")
+        return
+    
+    # Add user message
+    st.session_state.conversation.append({"role": "user", "content": question})
+    
+    with st.chat_message("user", avatar="🧑"):
+        st.markdown(question)
+    
+    # Handle greetings specially
+    if _is_greeting(question):
+        greeting_response = (
+            "Hello! 👋 I'm ready to help you understand your insurance policy.\n\n"
+            "You can ask me questions like:\n"
+            "- \"What's covered in my policy?\"\n"
+            "- \"Is hospitalization covered?\"\n"
+            "- \"What are the exclusions?\"\n"
+            "- \"How do I file a claim?\"\n\n"
+            "What would you like to know about your policy?"
+        )
+        st.session_state.conversation.append({
+            "role": "assistant",
+            "content": greeting_response
+        })
+        with st.chat_message("assistant", avatar="🛡️"):
+            st.markdown(greeting_response)
+        return
+    
+    # Check relevance for non-greetings
+    try:
+        embedding = get_embedding_instance(model_name=EMBEDDING_MODEL)
+        is_relevant, rejection_message = is_query_relevant(question, embeddings_model=embedding)
+    except Exception:
+        is_relevant, rejection_message = is_query_relevant(question)
+    
+    if not is_relevant:
+        friendly_rejection = (
+            "I'm here to help with your insurance policy! 🛡️\n\n"
+            "Try asking questions like:\n"
+            "- \"What's covered?\"\n"
+            "- \"Is surgery covered?\"\n"
+            "- \"What are the claim limits?\"\n\n"
+            "What would you like to know about your policy?"
+        )
+        st.session_state.conversation.append({
+            "role": "assistant",
+            "content": friendly_rejection
+        })
+        with st.chat_message("assistant", avatar="🛡️"):
+            st.markdown(friendly_rejection)
+        return
+    
+    # Get response
+    try:
+        llm = get_llm_instance(ModelProvider.GROQ, LLM_MODEL)
+        
+        with st.chat_message("assistant", avatar="🛡️"):
+            with st.spinner("Let me check your policy..."):
+                response = get_rag_response(
+                    question,
+                    st.session_state.vector_store,
+                    llm,
+                    documents=st.session_state.processed_documents,
+                    k=5,
+                    check_relevance=False,
+                    use_hybrid=True,
+                    use_reranking=True
+                )
+                
+                answer = response["answer"]
+                
+                # Store retrieval metrics
+                retrieval_info = response.get("retrieval_info", {})
+                retrieval_info['sources'] = response.get("sources", [])
+                st.session_state.last_retrieval_info = retrieval_info
+                
+                st.session_state.conversation.append({
+                    "role": "assistant",
+                    "content": answer
+                })
+                
+                st.markdown(answer)
+                
+    except Exception as e:
+        error_msg = "I had trouble looking that up. Could you try asking in a different way?"
+        st.error(error_msg)
+        logger.error(f"Query error: {str(e)}", exc_info=True)
+        
+        st.session_state.conversation.append({
+            "role": "assistant",
+            "content": error_msg
+        })
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main():
+    """Main application."""
+    render_sidebar()
+    render_chat()
+
 
 if __name__ == "__main__":
     main()

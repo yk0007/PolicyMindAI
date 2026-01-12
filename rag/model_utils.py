@@ -1,345 +1,171 @@
 """
-Utility functions for loading and managing language models.
+Model Utilities for PolicyMindAI.
+
+Simplified to use Groq only with best embedding model.
 """
+
 import os
 import logging
-from enum import Enum
-from typing import Optional, Dict, Any, Union, List, Literal
+from typing import Optional, Dict, Any, List
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# Best models (no user selection needed)
+DEFAULT_LLM_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+
+# Available Groq models
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768"
+]
+
+# For backward compatibility
+from enum import Enum
+
 class ModelProvider(str, Enum):
-    """Enum for supported model providers."""
+    """Supported model providers."""
     GROQ = "groq"
     OLLAMA = "ollama"
     GOOGLE = "google"
 
-# API keys should be provided via environment variables
-DEFAULT_API_KEYS = {
-    "GOOGLE_API_KEY": "",
-    "GROQ_API_KEY": ""
+
+MODEL_DISPLAY_NAMES = {
+    ModelProvider.GROQ: "Groq (Cloud)",
 }
 
-def get_api_key(provider: ModelProvider) -> str:
-    """Get API key for the specified provider from environment variables."""
-    key_name = f"{provider.upper()}_API_KEY"
-    api_key = os.environ.get(key_name, "")
+AVAILABLE_EMBEDDING_MODELS = [DEFAULT_EMBEDDING_MODEL]
+
+DEFAULT_API_KEYS = {}
+
+
+# =============================================================================
+# API Key Management
+# =============================================================================
+
+def get_api_key() -> str:
+    """Get Groq API key from environment or Streamlit secrets."""
+    # Try environment variable first
+    api_key = os.environ.get("GROQ_API_KEY")
+    
+    # Try Streamlit secrets as fallback
     if not api_key:
-        raise ValueError(f"{key_name} environment variable is not set")
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets'):
+                api_key = st.secrets.get("GROQ_API_KEY") or st.secrets.get("secrets", {}).get("GROQ_API_KEY")
+        except ImportError:
+            pass
+    
+    if not api_key:
+        raise ValueError(
+            "GROQ_API_KEY not found. Please set it as an environment variable "
+            "or in your .env file."
+        )
+    
     return api_key
 
-# Available embedding models
-AVAILABLE_EMBEDDING_MODELS = [
-    "BAAI/bge-base-en-v1.5",
-    "sentence-transformers/all-MiniLM-L6-v2"
-]
 
-# Display names for models
-MODEL_DISPLAY_NAMES = {
-    # Groq models
-    "llama3-70b-8192": "Llama 3 70B (Groq)",
-    "llama3-8b-8192": "Llama 3 8B (Groq)",
-    "gemma-7b-it": "Gemma 7B (Groq)",
-    "mixtral-8x7b-32768": "Mixtral 8x7B (Groq)",
-    "llama2-70b-4096": "Llama 2 70B (Groq)",
-    "gemma2-9b-it": "Gemma 2 9B (Groq)",
-    "llama-3.1-8b-instant": "Llama 3.1 8B (Groq)",
-    "meta-llama/llama-4-maverick-17b-128e-instruct": "Llama 4 Maverick 17B (Groq)",
-    "mistral-saba-24b": "Mistral Saba 24B (Groq)",
-    "qwen/qwen3-32b": "Qwen 32B (Groq)",
-    
-    # Ollama models
-    "llama3": "Llama 3 (Ollama)",
-    "mistral": "Mistral (Ollama)",
-    "gemma": "Gemma (Ollama)",
-    
-    # Google models
-    "gemini-1.5-pro-latest": "Gemini 1.5 Pro (Google)",
-    "gemini-1.5-flash-latest": "Gemini 1.5 Flash (Google)",
-    "gemini-1.0-pro-latest": "Gemini 1.0 Pro (Google)",
-    "gemini-1.0-flash-latest": "Gemini 1.0 Flash (Google)"
-}
-
-def get_available_models(provider: ModelProvider) -> List[str]:
-    """
-    Get available models for the specified provider.
-    
-    Args:
-        provider: The model provider
-        
-    Returns:
-        List of available model names
-    """
-    if provider == ModelProvider.GROQ:
-        # Return only 3 models as requested
-        return [
-            "llama3-70b-8192",  # Most capable model
-            "gemma2-9b-it",     # Good balance of capability and speed
-            "llama-3.1-8b-instant"  # Fastest model
-        ]
-    elif provider == ModelProvider.OLLAMA:
-        return ["llama3", "mistral", "gemma"]
-    elif provider == ModelProvider.GOOGLE:
-        return [
-            "gemini-1.5-pro-latest",
-            "gemini-1.5-flash-latest",
-            "gemini-1.0-pro-latest",
-            "gemini-1.0-flash-latest"
-        ]
-    else:
-        return []
-
-def set_api_keys(api_keys: Dict[str, str]) -> None:
-    """
-    Set API keys in the environment.
-    
-    Args:
-        api_keys: Dictionary of API keys (e.g., {"GOOGLE_API_KEY": "key"})
-    """
-    for key, value in api_keys.items():
-        if value:  # Only set non-empty values
-            os.environ[key] = value
+# =============================================================================
+# LLM Initialization
+# =============================================================================
 
 def get_llm_instance(
-    provider: ModelProvider,
-    model_name: str,
-    api_keys: Dict[str, str],
+    provider: ModelProvider = ModelProvider.GROQ,
+    model_name: str = DEFAULT_LLM_MODEL,
+    api_keys: Optional[Dict[str, str]] = None,
     temperature: float = 0.1,
     max_tokens: int = 4000,
     **kwargs
 ) -> Any:
     """
-    Get a language model instance for the specified provider.
+    Get a Groq language model instance.
     
     Args:
-        provider: The model provider (e.g., ModelProvider.GROQ)
-        model_name: The name of the model to use
-        api_keys: Dictionary of API keys for the provider (deprecated, use environment variables instead)
-        temperature: Temperature for sampling (0.0 to 1.0)
-        max_tokens: Maximum number of tokens to generate
-        **kwargs: Additional model-specific parameters
+        provider: Ignored (always uses Groq)
+        model_name: Name of the model
+        api_keys: Ignored (uses environment)
+        temperature: Sampling temperature
+        max_tokens: Maximum tokens to generate
         
     Returns:
-        An instance of the requested language model
+        Language model instance
     """
-    # Get API key from environment variables
-    api_key = get_api_key(provider)
-    
-    if provider == ModelProvider.GROQ:
-        try:
-            from langchain_groq import ChatGroq
-            return ChatGroq(
-                model_name=model_name,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                groq_api_key=api_key,
-                **kwargs
-            )
-        except ImportError:
-            logger.error("Groq not installed. Please install with: pip install langchain-groq")
-            raise
-    elif provider == ModelProvider.OLLAMA:
-        try:
-            from langchain_community.llms import Ollama
-            
-            # Set base URL for Ollama if not already set
-            if "OLLAMA_API_BASE" not in os.environ:
-                os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
-                
-            return Ollama(
-                model=model_name,
-                temperature=temperature,
-                num_predict=max_tokens,
-                **kwargs
-            )
-        except ImportError:
-            logger.error("Ollama not installed. Please install with: pip install langchain-community")
-            raise
-    elif provider == ModelProvider.GOOGLE:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            
-            return ChatGoogleGenerativeAI(
-                model=model_name,
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-                **kwargs
-            )
-        except ImportError:
-            logger.error("Google Generative AI not installed. Please install with: pip install langchain-google-genai")
-            raise
-    else:
-        raise ValueError(f"Unsupported model provider: {provider}")
+    try:
+        from langchain_groq import ChatGroq
+        api_key = get_api_key()
+        
+        return ChatGroq(
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            groq_api_key=api_key,
+            **kwargs
+        )
+    except ImportError:
+        raise ImportError("Install langchain-groq: pip install langchain-groq")
 
+
+def get_available_models(provider: ModelProvider = ModelProvider.GROQ) -> List[str]:
+    """Get available models."""
+    return GROQ_MODELS
+
+
+# Convenience alias
 def get_llm(
-    model_name: str = "llama3-70b-8192",
+    model_name: str = DEFAULT_LLM_MODEL,
     temperature: float = 0.1,
     max_tokens: int = 4000,
     **kwargs
-):
-    """
-    Get a language model instance based on the specified model name.
-    
-    Args:
-        model_name: Name of the model to load. Supported models:
-                   - Groq models: 'llama3-70b-8192', 'llama3-8b-8192', 'gemma-7b-it', etc.
-                   - Ollama models: 'llama3', 'mistral', 'gemma'
-                   - Google models: 'gemini-1.5-pro-latest', 'gemini-1.5-flash-latest', etc.
-        temperature: Temperature for sampling (0.0 to 1.0)
-        max_tokens: Maximum number of tokens to generate
-        **kwargs: Additional model-specific parameters
-        
-    Returns:
-        An instance of the requested language model
-        
-    Raises:
-        ValueError: If the model is not supported or API key is missing
-    """
-    try:
-        # First, try to determine the provider based on the model name
-        provider = None
-        
-        # Groq models
-        groq_models = [
-            "llama3-70b-8192", "llama3-8b-8192", "gemma-7b-it", "mixtral-8x7b-32768",
-            "llama2-70b-4096", "gemma2-9b-it", "llama-3.1-8b-instant",
-            "meta-llama/llama-4-maverick-17b-128e-instruct", "mistral-saba-24b", "qwen/qwen3-32b"
-        ]
-        
-        # Ollama models
-        ollama_models = ["llama3", "mistral", "gemma"]
-        
-        # Google models
-        google_models = [
-            "gemini-1.5-pro-latest", "gemini-1.5-flash-latest",
-            "gemini-1.0-pro-latest", "gemini-1.0-flash-latest"
-        ]
-        
-        if model_name in groq_models:
-            provider = ModelProvider.GROQ
-        elif model_name in ollama_models:
-            provider = ModelProvider.OLLAMA
-        elif model_name in google_models:
-            provider = ModelProvider.GOOGLE
-            
-        if provider is None:
-            # If we couldn't determine the provider, try to infer it from the model name
-            if any(name in model_name.lower() for name in ['llama', 'gemma', 'mistral', 'mixtral']):
-                provider = ModelProvider.GROQ
-            else:
-                raise ValueError(f"Could not determine provider for model: {model_name}")
-        
-        # Get the appropriate model instance directly
-        if provider == ModelProvider.GROQ:
-            try:
-                from langchain_groq import ChatGroq
-                api_key = get_api_key(provider)
-                return ChatGroq(
-                    model_name=model_name,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    groq_api_key=api_key,
-                    **kwargs
-                )
-            except ImportError:
-                logger.error("Groq not installed. Please install with: pip install langchain-groq")
-                raise
-        elif provider == ModelProvider.OLLAMA:
-            try:
-                from langchain_community.llms import Ollama
-                if "OLLAMA_API_BASE" not in os.environ:
-                    os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
-                return Ollama(
-                    model=model_name,
-                    temperature=temperature,
-                    num_predict=max_tokens,
-                    **kwargs
-                )
-            except ImportError:
-                logger.error("Ollama not installed. Please install with: pip install langchain-community")
-                raise
-        elif provider == ModelProvider.GOOGLE:
-            try:
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                api_key = get_api_key(provider)
-                return ChatGoogleGenerativeAI(
-                    model=model_name,
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                    google_api_key=api_key,
-                    **kwargs
-                )
-            except ImportError:
-                logger.error("Google Generative AI not installed. Please install with: pip install langchain-google-genai")
-                raise
-        else:
-            raise ValueError(f"Unsupported model provider: {provider}")
-        
-    except Exception as e:
-        logger.error(f"Error initializing model {model_name}: {str(e)}")
-        raise
+) -> Any:
+    """Get LLM instance with sensible defaults."""
+    return get_llm_instance(
+        ModelProvider.GROQ, 
+        model_name, 
+        temperature=temperature,
+        max_tokens=max_tokens, 
+        **kwargs
+    )
 
-def get_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", **kwargs) -> Any:
+
+# =============================================================================
+# Embedding Models
+# =============================================================================
+
+def get_embedding_instance(
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    **kwargs
+) -> Any:
     """
-    Get an embeddings model instance.
+    Get the best embeddings model instance.
     
     Args:
-        model_name: Name of the embeddings model to load
-        **kwargs: Additional model-specific parameters
+        model_name: Embedding model name (defaults to best model)
         
     Returns:
-        An instance of the requested embeddings model
+        Embeddings model instance
     """
-    logger.info(f"Initializing embeddings model: {model_name}")
     try:
-        # Try to use HuggingFaceEmbeddings if available
-        try:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            
-            # Filter out unsupported kwargs
-            supported_kwargs = {}
-            for key, value in kwargs.items():
-                if key not in ['api_keys', 'provider']:
-                    supported_kwargs[key] = value
-                    
-            return HuggingFaceEmbeddings(
-                model_name=model_name,
-                model_kwargs={"device": "cpu"},
-                encode_kwargs={"normalize_embeddings": True},
-                **supported_kwargs
-            )
-        except ImportError:
-            # Fall back to FakeEmbeddings if HuggingFaceEmbeddings is not available
-            logger.error("HuggingFace Embeddings not installed. Please install with: pip install sentence-transformers langchain-community")
-            from langchain.embeddings import FakeEmbeddings
-            return FakeEmbeddings(size=384)  # Return fake embeddings
-    except Exception as e:
-        logger.error(f"Critical error initializing embeddings model {model_name}: {str(e)}")
-        logger.error(f"Error type: {type(e).__name__}")
-        if hasattr(e, 'args') and e.args:
-            logger.error(f"Error details: {e.args}")
-        raise
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        
+        return HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+    except ImportError:
+        logger.error("HuggingFace Embeddings not installed")
+        raise ImportError(
+            "Install sentence-transformers: pip install sentence-transformers langchain-community"
+        )
+
 
 # Alias for backward compatibility
-def get_embedding_instance(model_name: str = "BAAI/bge-base-en-v1.5", provider: Optional[ModelProvider] = None, api_keys: Optional[Dict[str, str]] = None, **kwargs) -> Any:
-    """
-    Backward compatibility function for get_embeddings.
-    
-    Args:
-        model_name: The name of the embedding model to use
-        provider: Optional model provider (ignored)
-        api_keys: Optional dictionary of API keys (ignored)
-        **kwargs: Additional model-specific parameters
-        
-    Returns:
-        An instance of the requested embedding model
-    """
-    # Set API keys if provided
-    if api_keys:
-        set_api_keys(api_keys)
-    
-    # Filter out unsupported kwargs
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ['api_keys', 'provider']}
-    return get_embeddings(model_name=model_name, **filtered_kwargs)
+get_embeddings = get_embedding_instance
